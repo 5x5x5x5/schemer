@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-src blob:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-src 'self'">
 <meta http-equiv="X-Content-Type-Options" content="nosniff">
 <meta name="referrer" content="no-referrer">
 <title>Socratic Tutor</title>
@@ -299,60 +299,8 @@ main {
   </div>
 </main>
 
-<!-- Sandboxed iframe for code evaluation (Finding 1: isolates user code from parent DOM/cookies/localStorage) -->
-<iframe id="sandbox-frame" sandbox="allow-scripts" style="display:none"></iframe>
-
-<!-- Sandbox evaluator source — stored as inert text, loaded into the iframe at runtime -->
-<script type="text/plain" id="sandbox-code">
-window.addEventListener("message", function(e) {
-  var msg = e.data;
-  if (!msg || msg.type !== "evaluate") return;
-  var response = { type: "result", id: msg.id, error: null };
-  try {
-    var setup = msg.setup || "";
-    var code = msg.code;
-
-    function getReturnValue(setupCode, userCode) {
-      try {
-        return new Function('"use strict";\n' + setupCode + '\nreturn (\n' + userCode + '\n)')();
-      } catch(ex) {
-        var parts = userCode.split(";").map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
-        if (parts.length > 1) {
-          var stmts = parts.slice(0, -1).join(";\n") + ";";
-          var last = parts[parts.length - 1];
-          try {
-            return new Function('"use strict";\n' + setupCode + '\n' + stmts + '\nreturn (' + last + ')')();
-          } catch(ex2) { /* fall through */ }
-        }
-        return new Function('"use strict";\n' + setupCode + '\n' + userCode)();
-      }
-    }
-
-    if (msg.mode === "function-test") {
-      var results = [];
-      for (var i = 0; i < msg.testArgsList.length; i++) {
-        var argsStr = msg.testArgsList[i].map(function(a) { return JSON.stringify(a); }).join(", ");
-        var callCode = '"use strict";\n' + setup + '\n' + code + '\nreturn ' + msg.functionName + '(' + argsStr + ')';
-        results.push(new Function(callCode)());
-      }
-      response.testResults = results;
-    } else if (msg.mode === "predicate") {
-      var rv = getReturnValue(setup, code);
-      var predCode = msg.predicateCode
-        .replace(/\bRESULT\b/g, "___r___")
-        .replace(/\bCODE\b/g, "___c___");
-      var predFn = new Function("___r___", "___c___", '"use strict"; return (' + predCode + ')');
-      response.returnValue = rv;
-      response.predicateResult = predFn(rv, code);
-    } else {
-      response.returnValue = getReturnValue(setup, code);
-    }
-  } catch(err) {
-    response.error = err.message;
-  }
-  e.source.postMessage(response, "*");
-});
-</script>
+<!-- Sandboxed iframe: sandbox.html has its own CSP allowing unsafe-eval for new Function() -->
+<iframe id="sandbox-frame" sandbox="allow-scripts" src="sandbox.html" style="display:none"></iframe>
 
 <script>
 // ============================================================
@@ -798,24 +746,16 @@ const State = {
 const sandboxFrame = document.getElementById("sandbox-frame");
 const EVAL_TIMEOUT_MS = 5000;
 
-// Build sandbox HTML from the inert <script type="text/plain"> source
-function buildSandboxHTML() {
-  const code = document.getElementById("sandbox-code").textContent;
-  return "<!DOCTYPE html><html><body><scr" + "ipt>" + code + "</scr" + "ipt></body></html>";
-}
-
-let sandboxReady;
-let sandboxBlobUrl = null;
-function initSandbox() {
-  if (sandboxBlobUrl) URL.revokeObjectURL(sandboxBlobUrl);
+// Wait for the initial iframe load, or reload it to kill runaway code
+let sandboxReady = new Promise(function(resolve) {
+  sandboxFrame.addEventListener("load", resolve, { once: true });
+});
+function resetSandbox() {
   sandboxReady = new Promise(function(resolve) {
     sandboxFrame.addEventListener("load", resolve, { once: true });
   });
-  const blob = new Blob([buildSandboxHTML()], { type: "text/html" });
-  sandboxBlobUrl = URL.createObjectURL(blob);
-  sandboxFrame.src = sandboxBlobUrl;
+  sandboxFrame.src = "sandbox.html";
 }
-initSandbox();
 
 let evalId = 0;
 const pendingEvals = new Map();
@@ -845,7 +785,7 @@ function sendToSandbox(msg) {
       const timer = setTimeout(function() {
         pendingEvals.delete(id);
         // Recreate sandbox to kill runaway code (e.g. infinite loop)
-        initSandbox();
+        resetSandbox();
         resolve({ error: "Execution timed out (5 second limit)." });
       }, EVAL_TIMEOUT_MS);
 

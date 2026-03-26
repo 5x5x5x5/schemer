@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'">
+</head>
+<body>
+<script>
+window.addEventListener("message", function(e) {
+  var msg = e.data;
+  if (!msg || msg.type !== "evaluate") return;
+  var response = { type: "result", id: msg.id, error: null };
+  try {
+    var setup = msg.setup || "";
+    var code = msg.code;
+
+    function getReturnValue(setupCode, userCode) {
+      try {
+        return new Function('"use strict";\n' + setupCode + '\nreturn (\n' + userCode + '\n)')();
+      } catch(ex) {
+        var parts = userCode.split(";").map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
+        if (parts.length > 1) {
+          var stmts = parts.slice(0, -1).join(";\n") + ";";
+          var last = parts[parts.length - 1];
+          try {
+            return new Function('"use strict";\n' + setupCode + '\n' + stmts + '\nreturn (' + last + ')')();
+          } catch(ex2) { /* fall through */ }
+        }
+        return new Function('"use strict";\n' + setupCode + '\n' + userCode)();
+      }
+    }
+
+    if (msg.mode === "function-test") {
+      var results = [];
+      for (var i = 0; i < msg.testArgsList.length; i++) {
+        var argsStr = msg.testArgsList[i].map(function(a) { return JSON.stringify(a); }).join(", ");
+        var callCode = '"use strict";\n' + setup + '\n' + code + '\nreturn ' + msg.functionName + '(' + argsStr + ')';
+        results.push(new Function(callCode)());
+      }
+      response.testResults = results;
+    } else if (msg.mode === "predicate") {
+      var rv = getReturnValue(setup, code);
+      var predCode = msg.predicateCode
+        .replace(/\bRESULT\b/g, "___r___")
+        .replace(/\bCODE\b/g, "___c___");
+      var predFn = new Function("___r___", "___c___", '"use strict"; return (' + predCode + ')');
+      response.returnValue = rv;
+      response.predicateResult = predFn(rv, code);
+    } else {
+      response.returnValue = getReturnValue(setup, code);
+    }
+  } catch(err) {
+    response.error = err.message;
+  }
+  e.source.postMessage(response, "*");
+});
+</script>
+</body>
+</html>
