@@ -1,0 +1,981 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Socratic Tutor</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #fafaf8;
+  --surface: #ffffff;
+  --text: #1a1a1a;
+  --text-secondary: #555;
+  --border: #ddd;
+  --tutor-bg: #f0f0ec;
+  --student-bg: #e8eff8;
+  --correct: #2a7d3f;
+  --incorrect: #c43030;
+  --hint-bg: #fff8e1;
+  --hint-border: #e6c85e;
+  --accent: #2255aa;
+  --code-font: 'Menlo', 'Consolas', 'DejaVu Sans Mono', monospace;
+  --body-font: 'Georgia', 'Times New Roman', serif;
+}
+
+html { font-size: 17px; }
+
+body {
+  font-family: var(--body-font);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* -- Header -- */
+header {
+  padding: 1.5rem 1rem 1rem;
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+header h1 {
+  font-size: 1.4rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+header .subtitle {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-top: 0.25rem;
+}
+
+/* -- Progress bar -- */
+.progress-bar {
+  height: 3px;
+  background: var(--border);
+}
+.progress-bar .fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+
+/* -- Main layout -- */
+main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  max-width: 700px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 0 1rem;
+}
+
+/* -- Dialogue -- */
+#dialogue {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem 0;
+}
+
+.message {
+  margin-bottom: 1.25rem;
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.message .role {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  margin-bottom: 0.3rem;
+}
+
+.message .bubble {
+  padding: 0.8rem 1rem;
+  border-radius: 6px;
+  line-height: 1.55;
+}
+
+.message.tutor .bubble {
+  background: var(--tutor-bg);
+}
+
+.message.student .bubble {
+  background: var(--student-bg);
+  font-family: var(--code-font);
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+}
+
+.message.feedback .bubble {
+  font-size: 0.9rem;
+}
+
+.message.feedback.correct .bubble {
+  color: var(--correct);
+}
+
+.message.feedback.incorrect .bubble {
+  color: var(--incorrect);
+}
+
+.message.hint .bubble {
+  background: var(--hint-bg);
+  border-left: 3px solid var(--hint-border);
+  font-size: 0.9rem;
+}
+
+.message .bubble code {
+  font-family: var(--code-font);
+  font-size: 0.88em;
+  background: rgba(0,0,0,0.06);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+}
+
+/* -- Editor area -- */
+#editor-area {
+  position: sticky;
+  bottom: 0;
+  background: var(--bg);
+  padding: 0.75rem 0 1rem;
+  border-top: 1px solid var(--border);
+}
+
+#editor-area label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  margin-bottom: 0.4rem;
+}
+
+#code-editor {
+  width: 100%;
+  min-height: 3.5rem;
+  max-height: 12rem;
+  padding: 0.7rem 0.8rem;
+  font-family: var(--code-font);
+  font-size: 0.95rem;
+  line-height: 1.5;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  resize: vertical;
+  outline: none;
+}
+#code-editor:focus {
+  border-color: var(--accent);
+}
+
+.editor-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 0.5rem;
+}
+
+.editor-controls .hint-text {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.editor-controls .hint-text kbd {
+  font-family: var(--code-font);
+  font-size: 0.85em;
+  background: var(--tutor-bg);
+  padding: 0.1em 0.4em;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+.btn {
+  font-family: var(--body-font);
+  font-size: 0.85rem;
+  padding: 0.45rem 1.1rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn:hover { background: var(--tutor-bg); }
+
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.btn-primary:hover { background: #1a4488; }
+
+.btn-hint {
+  font-size: 0.8rem;
+  padding: 0.35rem 0.8rem;
+}
+
+/* -- Welcome screen -- */
+#welcome {
+  text-align: center;
+  padding: 3rem 1rem;
+}
+#welcome h2 {
+  font-size: 1.2rem;
+  margin-bottom: 0.75rem;
+}
+#welcome p {
+  color: var(--text-secondary);
+  margin-bottom: 1.5rem;
+  max-width: 480px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* -- Phase/lesson nav -- */
+.phase-title {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  text-align: center;
+  padding: 1rem 0 0.5rem;
+}
+
+/* -- Responsive -- */
+@media (max-width: 600px) {
+  html { font-size: 15px; }
+  main { padding: 0 0.5rem; }
+  #code-editor { font-size: 0.85rem; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Socratic Tutor</h1>
+  <div class="subtitle">Understand computation through questions</div>
+</header>
+<div class="progress-bar"><div class="fill" id="progress-fill" style="width: 0%"></div></div>
+
+<main>
+  <div id="dialogue" role="log" aria-live="polite" aria-label="Conversation"></div>
+
+  <div id="editor-area">
+    <label for="code-editor">Your code</label>
+    <textarea
+      id="code-editor"
+      aria-label="Code editor. Write your answer here."
+      placeholder="Type your code here..."
+      spellcheck="false"
+      autocomplete="off"
+      autocorrect="off"
+      autocapitalize="off"
+    ></textarea>
+    <div class="editor-controls">
+      <span class="hint-text"><kbd>Ctrl</kbd>+<kbd>Enter</kbd> to submit</span>
+      <div>
+        <button class="btn btn-hint" id="btn-hint" aria-label="Get a hint">Hint</button>
+        <button class="btn btn-primary" id="btn-submit" aria-label="Submit your code">Submit</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+// ============================================================
+// CURRICULUM DATA
+// ============================================================
+
+const CURRICULUM = [
+  {
+    phase: 1,
+    title: "Evaluation",
+    language: "javascript",
+    lessons: [
+      {
+        id: "values-exist",
+        title: "Values Exist",
+        questions: [
+          {
+            id: "val-1",
+            prompt: "Type <code>42</code>.",
+            setup: "",
+            check: { type: "value", expected: 42 },
+            hints: [
+              "Just type the number 42. Nothing else."
+            ],
+            followUp: "<code>42</code> is a value. When you typed it, the computer evaluated it \u2014 and got <code>42</code>. A value evaluates to itself."
+          },
+          {
+            id: "val-2",
+            prompt: "Type <code>\"hello\"</code> (with the quotes).",
+            setup: "",
+            check: { type: "value", expected: "hello" },
+            hints: [
+              "Surround the word hello with double quotes."
+            ],
+            followUp: "Another value. This one is text \u2014 called a string. The quotes mark its boundaries. Like <code>42</code>, it evaluates to itself."
+          },
+          {
+            id: "val-3",
+            prompt: "Type <code>true</code>.",
+            setup: "",
+            check: { type: "value", expected: true },
+            hints: [
+              "Type the word true, no quotes."
+            ],
+            followUp: "Three kinds of values so far: numbers (<code>42</code>), strings (<code>\"hello\"</code>), booleans (<code>true</code> and <code>false</code>). Each one evaluates to itself. These are the atoms \u2014 the simplest possible expressions."
+          }
+        ]
+      },
+      {
+        id: "operators-build",
+        title: "Operators Build Expressions",
+        questions: [
+          {
+            id: "op-1",
+            prompt: "What does <code>1 + 1</code> evaluate to?",
+            setup: "",
+            check: { type: "value", expected: 2 },
+            hints: [
+              "Type <code>1 + 1</code> and see what value it produces."
+            ],
+            followUp: "<code>1 + 1</code> is an expression. It's not a value by itself \u2014 it's two values combined with an operator. Evaluation turns it into a value: <code>2</code>."
+          },
+          {
+            id: "op-2",
+            prompt: "What does <code>\"hello\" + \" world\"</code> evaluate to?",
+            setup: "",
+            check: { type: "value", expected: "hello world" },
+            hints: [
+              "<code>+</code> does something different with strings than with numbers. Try it."
+            ],
+            followUp: "Same operator, different behavior. With numbers, <code>+</code> adds. With strings, <code>+</code> joins. The values determine what happens \u2014 not the operator alone."
+          },
+          {
+            id: "op-3",
+            prompt: "What does <code>3 > 2</code> evaluate to?",
+            setup: "",
+            check: { type: "value", expected: true },
+            hints: [
+              "<code>></code> asks \"is the left side greater?\" The answer is a boolean."
+            ],
+            followUp: "A comparison is an expression too. It evaluates to a boolean \u2014 <code>true</code> or <code>false</code>. Every expression, no matter what it looks like, evaluates to a value."
+          },
+          {
+            id: "op-4",
+            prompt: "What does <code>7 === 7</code> evaluate to?",
+            setup: "",
+            check: { type: "value", expected: true },
+            hints: [
+              "<code>===</code> asks \"are these the same value?\" Three equals signs."
+            ],
+            followUp: "<code>===</code> checks equality. <code>7 === 7</code> evaluates to <code>true</code>. <code>7 === 8</code> would evaluate to <code>false</code>. The result is always a boolean."
+          }
+        ]
+      },
+      {
+        id: "expressions-compose",
+        title: "Expressions Compose",
+        questions: [
+          {
+            id: "comp-1",
+            prompt: "What does <code>(1 + 2) * 3</code> evaluate to?",
+            setup: "",
+            check: { type: "value", expected: 9 },
+            hints: [
+              "Inside first: <code>1 + 2</code> evaluates to <code>3</code>. Then <code>3 * 3</code>."
+            ],
+            followUp: "Expressions nest. The inner expression evaluates first, and its value feeds into the outer expression. This is the fundamental structure of computation: evaluation from the inside out."
+          },
+          {
+            id: "comp-2",
+            prompt: "What does <code>\"abc\".length</code> evaluate to?",
+            setup: "",
+            check: { type: "value", expected: 3 },
+            hints: [
+              "<code>.length</code> asks a string how many characters it has."
+            ],
+            followUp: "<code>\"abc\"</code> evaluates to a string. <code>.length</code> evaluates that string to a number: <code>3</code>. One expression's value became the input to another."
+          },
+          {
+            id: "comp-3",
+            prompt: "What does <code>\"abc\".length + 1</code> evaluate to?",
+            setup: "",
+            check: { type: "value", expected: 4 },
+            hints: [
+              "<code>\"abc\".length</code> evaluates to <code>3</code>. Then <code>3 + 1</code>."
+            ],
+            followUp: "Three steps of evaluation: <code>\"abc\"</code> \u2192 a string. <code>.length</code> \u2192 <code>3</code>. <code>+ 1</code> \u2192 <code>4</code>. Each step produces a value that feeds into the next."
+          },
+          {
+            id: "comp-4",
+            prompt: "What does <code>(3 + 4) === 7</code> evaluate to?",
+            setup: "",
+            check: { type: "value", expected: true },
+            hints: [
+              "First evaluate <code>3 + 4</code>, then compare the result to <code>7</code>."
+            ],
+            followUp: "The left side evaluates to <code>7</code>. Then <code>7 === 7</code> evaluates to <code>true</code>. Different kinds of expressions \u2014 arithmetic, comparison \u2014 compose freely because they all produce values."
+          },
+          {
+            id: "comp-5",
+            prompt: "What does <code>2 + 3 * 4</code> evaluate to?",
+            setup: "",
+            check: { type: "value", expected: 14 },
+            hints: [
+              "Does <code>*</code> happen before <code>+</code>?",
+              "Multiplication first: <code>3 * 4</code> is <code>12</code>. Then <code>2 + 12</code>."
+            ],
+            followUp: "Order matters. <code>*</code> evaluates before <code>+</code>. Parentheses override this: <code>(2 + 3) * 4</code> would be <code>20</code>. The evaluation rules are predictable \u2014 if you know them, you can predict the result before running anything."
+          },
+          {
+            id: "comp-6",
+            prompt: "Write an expression that evaluates to <code>true</code>. Use at least two operators.",
+            setup: "",
+            check: { type: "predicate", predicateCode: "RESULT === true && CODE.match(/[+\\-*/><=!&|]/g) && CODE.match(/[+\\-*/><=!&|]/g).length >= 2" },
+            hints: [
+              "Combine arithmetic with a comparison. For example, does some calculation equal some value?",
+              "<code>(2 + 3) === 5</code> uses <code>+</code> and <code>===</code>."
+            ],
+            followUp: "You composed different kinds of expressions into one \u2014 arithmetic feeding into comparison. This nesting is how all programs are built: small expressions composed into larger ones."
+          }
+        ]
+      },
+      {
+        id: "naming",
+        title: "Naming Suspends Evaluation",
+        questions: [
+          {
+            id: "name-1",
+            prompt: "Type: <code>const x = 5; x + 1</code>",
+            setup: "",
+            check: { type: "value", expected: 6 },
+            hints: [
+              "Type it exactly as shown. The semicolon separates two parts."
+            ],
+            followUp: "<code>const x = 5</code> gives the name <code>x</code> to the value <code>5</code>. After that, <code>x</code> means <code>5</code>. Everywhere. It's an agreement: this name stands for this value."
+          },
+          {
+            id: "name-2",
+            prompt: "Define <code>a</code> as <code>10</code> and <code>b</code> as <code>3</code>. What is <code>a + b</code>?",
+            setup: "",
+            check: { type: "value", expected: 13 },
+            hints: [
+              "<code>const a = 10; const b = 3; a + b</code>"
+            ],
+            followUp: "Naming lets you refer to values without repeating them. More importantly, it lets you say what values MEAN: <code>a + b</code> isn't just <code>10 + 3</code> \u2014 it describes a relationship."
+          },
+          {
+            id: "name-3",
+            prompt: "Define <code>speed</code> as <code>60</code> and <code>time</code> as <code>2.5</code>. What is <code>speed * time</code>?",
+            setup: "",
+            check: { type: "value", expected: 150 },
+            hints: [
+              "<code>const speed = 60; const time = 2.5; speed * time</code>"
+            ],
+            followUp: "<code>speed * time</code> tells you what you're computing. <code>60 * 2.5</code> doesn't. Names are the first tool for managing complexity \u2014 they turn anonymous computation into meaningful description."
+          },
+          {
+            id: "name-4",
+            prompt: "Here's a key idea. Type: <code>const x = 2 + 3; x * x</code>",
+            setup: "",
+            check: { type: "value", expected: 25 },
+            hints: [
+              "<code>2 + 3</code> evaluates to <code>5</code>, and <code>x</code> gets that value."
+            ],
+            followUp: "<code>const x = 2 + 3</code> evaluates <code>2 + 3</code> to get <code>5</code>, then names it <code>x</code>. After that, <code>x</code> IS <code>5</code>. You can replace <code>x</code> with <code>5</code> anywhere and nothing changes. This property \u2014 that a name is perfectly interchangeable with its value \u2014 is called referential transparency. It will matter a great deal later."
+          },
+          {
+            id: "name-5",
+            prompt: "Type: <code>const greeting = \"hi\"; greeting + \"!\"</code>",
+            setup: "",
+            check: { type: "value", expected: "hi!" },
+            hints: [
+              "Define the string, then concatenate with <code>+</code>."
+            ],
+            followUp: "Names work the same way for every kind of value \u2014 numbers, strings, booleans. The pattern is always: evaluate the right side, bind the name to the result."
+          }
+        ]
+      },
+      {
+        id: "predicting",
+        title: "Predicting Evaluation",
+        questions: [
+          {
+            id: "pred-1",
+            prompt: "Before you type this, predict the result in your head. Then type it to check: <code>(4 + 6) / 2</code>",
+            setup: "",
+            check: { type: "value", expected: 5 },
+            hints: [
+              "Inside first: <code>4 + 6</code> is <code>10</code>. Then <code>10 / 2</code>."
+            ],
+            followUp: "If you predicted <code>5</code>, you understand evaluation. You can trace what the computer will do before it does it. This ability \u2014 predicting computation \u2014 is what separates someone who uses a computer from someone who understands one."
+          },
+          {
+            id: "pred-2",
+            prompt: "Predict, then check: <code>\"hello\".length === 5</code>",
+            setup: "",
+            check: { type: "value", expected: true },
+            hints: [
+              "<code>\"hello\"</code> has 5 characters. Is <code>5 === 5</code> true?"
+            ],
+            followUp: "Two different kinds of evaluation composed: a property access, then a comparison. You can trace through each step because evaluation is predictable."
+          },
+          {
+            id: "pred-3",
+            prompt: "Write an expression that evaluates to the string <code>\"10\"</code>. Not the number 10 \u2014 the string.",
+            setup: "",
+            check: { type: "predicate", predicateCode: "RESULT === '10' && typeof RESULT === 'string'" },
+            hints: [
+              "You could just type <code>\"10\"</code> \u2014 but think about other ways too.",
+              "What does <code>String(10)</code> evaluate to? Or <code>\"1\" + \"0\"</code>?"
+            ],
+            followUp: "The number <code>10</code> and the string <code>\"10\"</code> are different values. They look similar to us but they're different to the computer. Types matter \u2014 they determine what operations mean."
+          },
+          {
+            id: "pred-4",
+            prompt: "Write an expression that evaluates to <code>false</code>. Make it interesting \u2014 use at least two operators.",
+            setup: "",
+            check: { type: "predicate", predicateCode: "RESULT === false && CODE.match(/[+\\-*/><=!&|]/g) && CODE.match(/[+\\-*/><=!&|]/g).length >= 2" },
+            hints: [
+              "A comparison where the arithmetic doesn't work out. Does <code>(2 + 2) === 5</code>?",
+              "Or combine booleans: <code>true && (3 > 10)</code>."
+            ],
+            followUp: "You can construct any value you need by composing expressions. The value <code>false</code> isn't just something that exists \u2014 it's something you can compute from other parts."
+          },
+          {
+            id: "pred-5",
+            prompt: "Final question for this phase. Define <code>r</code> as <code>4</code>. Write an expression using <code>r</code> that computes the area of a circle (approximately). Use <code>3.14159</code> for \u03C0.",
+            setup: "",
+            check: { type: "predicate", predicateCode: "Math.abs(RESULT - 50.26544) < 0.01 && CODE.includes('const r')" },
+            hints: [
+              "Area of a circle: \u03C0 \u00D7 r\u00B2. In code: <code>3.14159 * r * r</code>.",
+              "<code>const r = 4; 3.14159 * r * r</code>"
+            ],
+            followUp: "You just used everything from this phase: a value (<code>4</code>), a name (<code>r</code>), operators (<code>*</code>), and composition (<code>r * r</code> feeds into <code>3.14159 * ...</code>). This is a real computation \u2014 small, but real. Every program, no matter how complex, is made of these same pieces: values, names, operators, and composition. What changes is the scale. Next, you'll learn the tool that makes scale manageable: abstraction."
+          }
+        ]
+      }
+    ]
+  }
+];
+
+
+// ============================================================
+// APP STATE
+// ============================================================
+
+const State = {
+  phaseIndex: 0,
+  lessonIndex: 0,
+  questionIndex: 0,
+  hintIndex: 0,
+  history: [],
+
+  save() {
+    try {
+      localStorage.setItem("socratic-tutor", JSON.stringify({
+        phaseIndex: this.phaseIndex,
+        lessonIndex: this.lessonIndex,
+        questionIndex: this.questionIndex,
+        history: this.history
+      }));
+    } catch(e) { /* localStorage unavailable */ }
+  },
+
+  load() {
+    try {
+      const saved = localStorage.getItem("socratic-tutor");
+      if (saved) {
+        const data = JSON.parse(saved);
+        this.phaseIndex = data.phaseIndex || 0;
+        this.lessonIndex = data.lessonIndex || 0;
+        this.questionIndex = data.questionIndex || 0;
+        this.history = data.history || [];
+        this.hintIndex = 0;
+        return true;
+      }
+    } catch(e) { /* ignore */ }
+    return false;
+  },
+
+  reset() {
+    this.phaseIndex = 0;
+    this.lessonIndex = 0;
+    this.questionIndex = 0;
+    this.hintIndex = 0;
+    this.history = [];
+    try { localStorage.removeItem("socratic-tutor"); } catch(e) {}
+  },
+
+  currentPhase() {
+    return CURRICULUM[this.phaseIndex] || null;
+  },
+
+  currentLesson() {
+    const phase = this.currentPhase();
+    return phase ? phase.lessons[this.lessonIndex] || null : null;
+  },
+
+  currentQuestion() {
+    const lesson = this.currentLesson();
+    return lesson ? lesson.questions[this.questionIndex] || null : null;
+  },
+
+  totalQuestions() {
+    let count = 0;
+    for (const phase of CURRICULUM) {
+      for (const lesson of phase.lessons) {
+        count += lesson.questions.length;
+      }
+    }
+    return count;
+  },
+
+  completedQuestions() {
+    let count = 0;
+    for (const phase of CURRICULUM) {
+      for (let li = 0; li < phase.lessons.length; li++) {
+        for (let qi = 0; qi < phase.lessons[li].questions.length; qi++) {
+          if (
+            CURRICULUM.indexOf(phase) < this.phaseIndex ||
+            (CURRICULUM.indexOf(phase) === this.phaseIndex && li < this.lessonIndex) ||
+            (CURRICULUM.indexOf(phase) === this.phaseIndex && li === this.lessonIndex && qi < this.questionIndex)
+          ) {
+            count++;
+          }
+        }
+      }
+    }
+    return count;
+  },
+
+  advance() {
+    const lesson = this.currentLesson();
+    if (!lesson) return false;
+
+    this.questionIndex++;
+    this.hintIndex = 0;
+
+    if (this.questionIndex >= lesson.questions.length) {
+      this.questionIndex = 0;
+      this.lessonIndex++;
+
+      const phase = this.currentPhase();
+      if (!phase || this.lessonIndex >= phase.lessons.length) {
+        this.lessonIndex = 0;
+        this.phaseIndex++;
+
+        if (this.phaseIndex >= CURRICULUM.length) {
+          return false; // curriculum complete
+        }
+      }
+    }
+
+    this.save();
+    return true;
+  }
+};
+
+
+// ============================================================
+// EVALUATOR
+// ============================================================
+
+function evaluate(code, question) {
+  const result = { success: false, actual: undefined, expected: undefined, error: null };
+
+  try {
+    const setupCode = question.setup || "";
+    const fullCode = setupCode + "\n" + code;
+
+    // Execute and capture the last expression's value
+    const fn = new Function(`"use strict";\n${fullCode}`);
+    const actualResult = fn();
+
+    // If the code is a single expression or ends with an expression,
+    // we need to capture its value. Wrap to return last expression.
+    let returnValue;
+    try {
+      const returnFn = new Function(`"use strict";\n${setupCode}\nreturn (\n${code}\n)`);
+      returnValue = returnFn();
+    } catch(e) {
+      // If that fails, try executing as statements where last expression is returned
+      // Split by semicolons, wrap last part in return
+      const parts = code.split(";").map(s => s.trim()).filter(s => s.length > 0);
+      if (parts.length > 1) {
+        const statements = parts.slice(0, -1).join(";\n") + ";";
+        const lastExpr = parts[parts.length - 1];
+        try {
+          const multiReturnFn = new Function(`"use strict";\n${setupCode}\n${statements}\nreturn (${lastExpr})`);
+          returnValue = multiReturnFn();
+        } catch(e2) {
+          returnValue = actualResult;
+        }
+      } else {
+        returnValue = actualResult;
+      }
+    }
+
+    const check = question.check;
+
+    if (check.type === "value") {
+      result.expected = check.expected;
+      result.actual = returnValue;
+      result.success = returnValue === check.expected;
+
+    } else if (check.type === "function") {
+      const fnName = check.functionName;
+      // Create a scope with the student's code, then call the function
+      const tests = check.tests;
+      let allPassed = true;
+      let firstFailure = null;
+
+      for (const test of tests) {
+        const callCode = `${setupCode}\n${code}\nreturn ${fnName}(${test.args.map(a => JSON.stringify(a)).join(", ")})`;
+        const testFn = new Function(`"use strict";\n${callCode}`);
+        const testResult = testFn();
+        if (testResult !== test.expected) {
+          allPassed = false;
+          firstFailure = { args: test.args, expected: test.expected, actual: testResult };
+          break;
+        }
+      }
+
+      result.success = allPassed;
+      if (firstFailure) {
+        result.expected = `${fnName}(${firstFailure.args.join(", ")}) should be ${JSON.stringify(firstFailure.expected)}`;
+        result.actual = firstFailure.actual;
+      }
+
+    } else if (check.type === "predicate") {
+      const predCode = check.predicateCode
+        .replace(/\bRESULT\b/g, "___result___")
+        .replace(/\bCODE\b/g, "___code___");
+      const predFn = new Function("___result___", "___code___", `"use strict"; return (${predCode})`);
+      result.success = predFn(returnValue, code);
+      result.actual = returnValue;
+
+    } else if (check.type === "output") {
+      // TODO: capture console.log output
+      result.success = false;
+      result.error = "Output checks not yet implemented.";
+    }
+
+  } catch(e) {
+    result.error = e.message;
+  }
+
+  return result;
+}
+
+
+// ============================================================
+// UI
+// ============================================================
+
+const dialogue = document.getElementById("dialogue");
+const editor = document.getElementById("code-editor");
+const btnSubmit = document.getElementById("btn-submit");
+const btnHint = document.getElementById("btn-hint");
+const progressFill = document.getElementById("progress-fill");
+
+function addMessage(type, html, extraClass) {
+  const div = document.createElement("div");
+  div.className = `message ${type}` + (extraClass ? ` ${extraClass}` : "");
+
+  const roleLabel = type === "tutor" ? "Tutor" : type === "student" ? "You" : "";
+  if (roleLabel) {
+    const roleDiv = document.createElement("div");
+    roleDiv.className = "role";
+    roleDiv.textContent = roleLabel;
+    div.appendChild(roleDiv);
+  }
+
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  bubble.innerHTML = html;
+  div.appendChild(bubble);
+
+  dialogue.appendChild(div);
+  dialogue.scrollTop = dialogue.scrollHeight;
+  return div;
+}
+
+function updateProgress() {
+  const total = State.totalQuestions();
+  const done = State.completedQuestions();
+  const pct = total > 0 ? (done / total) * 100 : 0;
+  progressFill.style.width = pct + "%";
+}
+
+function showCurrentQuestion() {
+  const question = State.currentQuestion();
+  if (!question) {
+    addMessage("tutor", "You've completed everything available so far. Well done. More lessons are coming.");
+    editor.disabled = true;
+    btnSubmit.disabled = true;
+    btnHint.disabled = true;
+    return;
+  }
+
+  const lesson = State.currentLesson();
+  const phase = State.currentPhase();
+
+  // Show lesson title if this is the first question of a lesson
+  if (State.questionIndex === 0) {
+    const titleDiv = document.createElement("div");
+    titleDiv.className = "phase-title";
+    titleDiv.textContent = `${phase.title} \u2014 ${lesson.title}`;
+    dialogue.appendChild(titleDiv);
+  }
+
+  addMessage("tutor", question.prompt);
+  editor.value = "";
+  editor.disabled = false;
+  editor.focus();
+  btnSubmit.disabled = false;
+  btnHint.disabled = !question.hints || question.hints.length === 0;
+  State.hintIndex = 0;
+  updateProgress();
+}
+
+function handleSubmit() {
+  const code = editor.value.trim();
+  if (!code) return;
+
+  const question = State.currentQuestion();
+  if (!question) return;
+
+  // Show what the student typed
+  addMessage("student", escapeHtml(code));
+
+  // Evaluate
+  const result = evaluate(code, question);
+
+  if (result.error) {
+    addMessage("feedback", `Error: <code>${escapeHtml(result.error)}</code>`, "incorrect");
+    return;
+  }
+
+  if (result.success) {
+    // Save to history
+    State.history.push({
+      questionId: question.id,
+      code: code,
+      timestamp: Date.now()
+    });
+
+    // Show follow-up
+    if (question.followUp) {
+      addMessage("tutor", question.followUp);
+    }
+
+    // Advance
+    const hasMore = State.advance();
+    if (hasMore) {
+      showCurrentQuestion();
+    } else {
+      addMessage("tutor", "You've completed everything available so far. Well done. More lessons are coming.");
+      editor.disabled = true;
+      btnSubmit.disabled = true;
+      btnHint.disabled = true;
+      updateProgress();
+    }
+    State.save();
+
+  } else {
+    // Show what went wrong
+    let msg = "Not quite.";
+    if (result.expected !== undefined && result.actual !== undefined) {
+      msg += ` Your code returned <code>${escapeHtml(String(result.actual))}</code>.`;
+      if (typeof result.expected === "string" && result.expected.includes("should be")) {
+        msg += ` ${escapeHtml(result.expected)}.`;
+      } else {
+        msg += ` Expected <code>${escapeHtml(String(result.expected))}</code>.`;
+      }
+    }
+    addMessage("feedback", msg, "incorrect");
+  }
+}
+
+function handleHint() {
+  const question = State.currentQuestion();
+  if (!question || !question.hints) return;
+
+  if (State.hintIndex < question.hints.length) {
+    addMessage("hint", question.hints[State.hintIndex]);
+    State.hintIndex++;
+
+    if (State.hintIndex >= question.hints.length) {
+      btnHint.disabled = true;
+    }
+  }
+}
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// -- Event listeners --
+
+btnSubmit.addEventListener("click", handleSubmit);
+btnHint.addEventListener("click", handleHint);
+
+editor.addEventListener("keydown", function(e) {
+  // Ctrl+Enter or Cmd+Enter to submit
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    handleSubmit();
+    return;
+  }
+
+  // Tab inserts spaces
+  if (e.key === "Tab") {
+    e.preventDefault();
+    const start = this.selectionStart;
+    const end = this.selectionEnd;
+    this.value = this.value.substring(0, start) + "  " + this.value.substring(end);
+    this.selectionStart = this.selectionEnd = start + 2;
+  }
+});
+
+
+// ============================================================
+// INIT
+// ============================================================
+
+(function init() {
+  const resumed = State.load();
+
+  if (resumed && State.completedQuestions() > 0) {
+    addMessage("tutor", `Welcome back. Let's pick up where you left off.`);
+  } else {
+    addMessage("tutor", "Let's begin. I'll ask questions. You'll answer by writing code that the computer evaluates.");
+    addMessage("tutor", "Every question has an answer you can type and run. If you're stuck, ask for a hint. The only way through is to think, then type, then see what happens.");
+  }
+
+  showCurrentQuestion();
+})();
+</script>
+</body>
+</html>
+
