@@ -634,6 +634,14 @@ const CURRICULUM = [
   }
 ];
 
+// Deep-freeze CURRICULUM to prevent runtime mutation (defense-in-depth)
+(function deepFreeze(obj) {
+  Object.freeze(obj);
+  for (const v of Object.values(obj)) {
+    if (v && typeof v === "object" && !Object.isFrozen(v)) deepFreeze(v);
+  }
+})(CURRICULUM);
+
 
 // ============================================================
 // APP STATE (Finding 5: validated deserialization, Finding 7: capped history)
@@ -797,22 +805,28 @@ function buildSandboxHTML() {
 }
 
 let sandboxReady;
+let sandboxBlobUrl = null;
 function initSandbox() {
+  if (sandboxBlobUrl) URL.revokeObjectURL(sandboxBlobUrl);
   sandboxReady = new Promise(function(resolve) {
     sandboxFrame.addEventListener("load", resolve, { once: true });
   });
   const blob = new Blob([buildSandboxHTML()], { type: "text/html" });
-  sandboxFrame.src = URL.createObjectURL(blob);
+  sandboxBlobUrl = URL.createObjectURL(blob);
+  sandboxFrame.src = sandboxBlobUrl;
 }
 initSandbox();
 
 let evalId = 0;
 const pendingEvals = new Map();
 
+// Note: sandbox has opaque origin (no allow-same-origin), so we cannot validate
+// e.origin. We validate e.source and message shape instead.
 window.addEventListener("message", function(e) {
   if (!sandboxFrame.contentWindow || e.source !== sandboxFrame.contentWindow) return;
   const msg = e.data;
-  if (!msg || msg.type !== "result") return;
+  if (!msg || msg.type !== "result" || typeof msg.id !== "number") return;
+  if (msg.error !== null && typeof msg.error !== "string") return;
   const pending = pendingEvals.get(msg.id);
   if (pending) {
     pendingEvals.delete(msg.id);
@@ -912,6 +926,12 @@ const editor = document.getElementById("code-editor");
 const btnSubmit = document.getElementById("btn-submit");
 const btnHint = document.getElementById("btn-hint");
 const progressFill = document.getElementById("progress-fill");
+
+// Escapes </code> sequences in dynamic values before embedding in <code> tags,
+// preventing renderRichText regex from splitting incorrectly.
+function safeForCodeTag(str) {
+  return String(str).replace(/<\/code>/gi, "<\u200B/code>");
+}
 
 // Renders text that may contain <code>...</code> tags safely.
 // Only <code> elements are created; all other content becomes text nodes.
@@ -1017,7 +1037,7 @@ async function handleSubmit() {
   btnHint.disabled = !question.hints || State.hintIndex >= question.hints.length;
 
   if (result.error) {
-    addMessage("feedback", `Error: <code>${result.error}</code>`, "incorrect");
+    addMessage("feedback", `Error: <code>${safeForCodeTag(result.error)}</code>`, "incorrect");
     return;
   }
 
@@ -1051,11 +1071,11 @@ async function handleSubmit() {
     // Show what went wrong
     let msg = "Not quite.";
     if (result.expected !== undefined && result.actual !== undefined) {
-      msg += ` Your code returned <code>${String(result.actual)}</code>.`;
+      msg += ` Your code returned <code>${safeForCodeTag(result.actual)}</code>.`;
       if (typeof result.expected === "string" && result.expected.includes("should be")) {
         msg += ` ${result.expected}.`;
       } else {
-        msg += ` Expected <code>${String(result.expected)}</code>.`;
+        msg += ` Expected <code>${safeForCodeTag(result.expected)}</code>.`;
       }
     }
     addMessage("feedback", msg, "incorrect");
