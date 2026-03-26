@@ -290,7 +290,7 @@ main {
       autocapitalize="off"
     ></textarea>
     <div class="editor-controls">
-      <span class="hint-text"><kbd>Ctrl</kbd>+<kbd>Enter</kbd> to submit</span>
+      <span class="hint-text"><kbd>Shift</kbd>+<kbd>Enter</kbd> to submit</span>
       <div>
         <button class="btn btn-hint" id="btn-hint" aria-label="Get a hint">Hint</button>
         <button class="btn btn-primary" id="btn-submit" aria-label="Submit your code">Submit</button>
@@ -914,7 +914,7 @@ function addMessage(type, content, extraClass) {
 
   div.appendChild(bubble);
   dialogue.appendChild(div);
-  dialogue.scrollTop = dialogue.scrollHeight;
+  div.scrollIntoView({ behavior: "smooth", block: "end" });
   return div;
 }
 
@@ -1042,8 +1042,8 @@ btnSubmit.addEventListener("click", handleSubmit);
 btnHint.addEventListener("click", handleHint);
 
 editor.addEventListener("keydown", function(e) {
-  // Ctrl+Enter or Cmd+Enter to submit
-  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+  // Ctrl+Enter, Cmd+Enter, or Shift+Enter to submit
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey || e.shiftKey)) {
     e.preventDefault();
     handleSubmit();
     return;
