@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-src blob:">
+<meta http-equiv="X-Content-Type-Options" content="nosniff">
+<meta name="referrer" content="no-referrer">
 <title>Socratic Tutor</title>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -296,6 +299,61 @@ main {
   </div>
 </main>
 
+<!-- Sandboxed iframe for code evaluation (Finding 1: isolates user code from parent DOM/cookies/localStorage) -->
+<iframe id="sandbox-frame" sandbox="allow-scripts" style="display:none"></iframe>
+
+<!-- Sandbox evaluator source — stored as inert text, loaded into the iframe at runtime -->
+<script type="text/plain" id="sandbox-code">
+window.addEventListener("message", function(e) {
+  var msg = e.data;
+  if (!msg || msg.type !== "evaluate") return;
+  var response = { type: "result", id: msg.id, error: null };
+  try {
+    var setup = msg.setup || "";
+    var code = msg.code;
+
+    function getReturnValue(setupCode, userCode) {
+      try {
+        return new Function('"use strict";\n' + setupCode + '\nreturn (\n' + userCode + '\n)')();
+      } catch(ex) {
+        var parts = userCode.split(";").map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
+        if (parts.length > 1) {
+          var stmts = parts.slice(0, -1).join(";\n") + ";";
+          var last = parts[parts.length - 1];
+          try {
+            return new Function('"use strict";\n' + setupCode + '\n' + stmts + '\nreturn (' + last + ')')();
+          } catch(ex2) { /* fall through */ }
+        }
+        return new Function('"use strict";\n' + setupCode + '\n' + userCode)();
+      }
+    }
+
+    if (msg.mode === "function-test") {
+      var results = [];
+      for (var i = 0; i < msg.testArgsList.length; i++) {
+        var argsStr = msg.testArgsList[i].map(function(a) { return JSON.stringify(a); }).join(", ");
+        var callCode = '"use strict";\n' + setup + '\n' + code + '\nreturn ' + msg.functionName + '(' + argsStr + ')';
+        results.push(new Function(callCode)());
+      }
+      response.testResults = results;
+    } else if (msg.mode === "predicate") {
+      var rv = getReturnValue(setup, code);
+      var predCode = msg.predicateCode
+        .replace(/\bRESULT\b/g, "___r___")
+        .replace(/\bCODE\b/g, "___c___");
+      var predFn = new Function("___r___", "___c___", '"use strict"; return (' + predCode + ')');
+      response.returnValue = rv;
+      response.predicateResult = predFn(rv, code);
+    } else {
+      response.returnValue = getReturnValue(setup, code);
+    }
+  } catch(err) {
+    response.error = err.message;
+  }
+  e.source.postMessage(response, "*");
+});
+</script>
+
 <script>
 // ============================================================
 // CURRICULUM DATA
@@ -578,8 +636,11 @@ const CURRICULUM = [
 
 
 // ============================================================
-// APP STATE
+// APP STATE (Finding 5: validated deserialization, Finding 7: capped history)
 // ============================================================
+
+const HISTORY_MAX_ENTRIES = 500;
+const HISTORY_MAX_CODE_LENGTH = 4096;
 
 const State = {
   phaseIndex: 0,
@@ -590,28 +651,56 @@ const State = {
 
   save() {
     try {
+      const historyToSave = this.history.slice(-HISTORY_MAX_ENTRIES).map(h => ({
+        questionId: h.questionId,
+        code: typeof h.code === "string" ? h.code.slice(0, HISTORY_MAX_CODE_LENGTH) : "",
+        timestamp: h.timestamp
+      }));
       localStorage.setItem("socratic-tutor", JSON.stringify({
         phaseIndex: this.phaseIndex,
         lessonIndex: this.lessonIndex,
         questionIndex: this.questionIndex,
-        history: this.history
+        history: historyToSave
       }));
-    } catch(e) { /* localStorage unavailable */ }
+    } catch(e) {
+      if (e.name === "QuotaExceededError") {
+        console.warn("Socratic Tutor: progress could not be saved (storage quota exceeded).");
+      }
+    }
   },
 
   load() {
     try {
       const saved = localStorage.getItem("socratic-tutor");
-      if (saved) {
-        const data = JSON.parse(saved);
-        this.phaseIndex = data.phaseIndex || 0;
-        this.lessonIndex = data.lessonIndex || 0;
-        this.questionIndex = data.questionIndex || 0;
-        this.history = data.history || [];
-        this.hintIndex = 0;
-        return true;
-      }
-    } catch(e) { /* ignore */ }
+      if (!saved) return false;
+      const data = JSON.parse(saved);
+
+      const clampInt = (v, min, max) =>
+        (Number.isInteger(v) && v >= min && v <= max) ? v : 0;
+
+      const maxPhase = CURRICULUM.length - 1;
+      this.phaseIndex = clampInt(data.phaseIndex, 0, maxPhase);
+
+      const phase = CURRICULUM[this.phaseIndex];
+      const maxLesson = phase ? phase.lessons.length - 1 : 0;
+      this.lessonIndex = clampInt(data.lessonIndex, 0, maxLesson);
+
+      const lesson = phase ? phase.lessons[this.lessonIndex] : null;
+      const maxQuestion = lesson ? lesson.questions.length - 1 : 0;
+      this.questionIndex = clampInt(data.questionIndex, 0, maxQuestion);
+
+      this.history = Array.isArray(data.history)
+        ? data.history.filter(h =>
+            h !== null && typeof h === "object" &&
+            typeof h.questionId === "string" &&
+            typeof h.code === "string" &&
+            typeof h.timestamp === "number"
+          ).slice(0, HISTORY_MAX_ENTRIES)
+        : [];
+
+      this.hintIndex = 0;
+      return true;
+    } catch(e) { /* corrupted data */ }
     return false;
   },
 
@@ -695,89 +784,117 @@ const State = {
 
 
 // ============================================================
-// EVALUATOR
+// SANDBOXED EVALUATOR (Finding 1: isolated iframe, Finding 4: timeout)
 // ============================================================
 
-function evaluate(code, question) {
+const sandboxFrame = document.getElementById("sandbox-frame");
+const EVAL_TIMEOUT_MS = 5000;
+
+// Build sandbox HTML from the inert <script type="text/plain"> source
+function buildSandboxHTML() {
+  const code = document.getElementById("sandbox-code").textContent;
+  return "<!DOCTYPE html><html><body><scr" + "ipt>" + code + "</scr" + "ipt></body></html>";
+}
+
+let sandboxReady;
+function initSandbox() {
+  sandboxReady = new Promise(function(resolve) {
+    sandboxFrame.addEventListener("load", resolve, { once: true });
+  });
+  const blob = new Blob([buildSandboxHTML()], { type: "text/html" });
+  sandboxFrame.src = URL.createObjectURL(blob);
+}
+initSandbox();
+
+let evalId = 0;
+const pendingEvals = new Map();
+
+window.addEventListener("message", function(e) {
+  if (!sandboxFrame.contentWindow || e.source !== sandboxFrame.contentWindow) return;
+  const msg = e.data;
+  if (!msg || msg.type !== "result") return;
+  const pending = pendingEvals.get(msg.id);
+  if (pending) {
+    pendingEvals.delete(msg.id);
+    clearTimeout(pending.timer);
+    pending.resolve(msg);
+  }
+});
+
+function sendToSandbox(msg) {
+  return sandboxReady.then(function() {
+    return new Promise(function(resolve) {
+      const id = ++evalId;
+      msg.type = "evaluate";
+      msg.id = id;
+
+      const timer = setTimeout(function() {
+        pendingEvals.delete(id);
+        // Recreate sandbox to kill runaway code (e.g. infinite loop)
+        initSandbox();
+        resolve({ error: "Execution timed out (5 second limit)." });
+      }, EVAL_TIMEOUT_MS);
+
+      pendingEvals.set(id, { resolve: resolve, timer: timer });
+      sandboxFrame.contentWindow.postMessage(msg, "*");
+    });
+  });
+}
+
+async function evaluate(code, question) {
   const result = { success: false, actual: undefined, expected: undefined, error: null };
+  const check = question.check;
+  const setup = question.setup || "";
 
   try {
-    const setupCode = question.setup || "";
-    const fullCode = setupCode + "\n" + code;
-
-    // Execute and capture the last expression's value
-    const fn = new Function(`"use strict";\n${fullCode}`);
-    const actualResult = fn();
-
-    // If the code is a single expression or ends with an expression,
-    // we need to capture its value. Wrap to return last expression.
-    let returnValue;
-    try {
-      const returnFn = new Function(`"use strict";\n${setupCode}\nreturn (\n${code}\n)`);
-      returnValue = returnFn();
-    } catch(e) {
-      // If that fails, try executing as statements where last expression is returned
-      // Split by semicolons, wrap last part in return
-      const parts = code.split(";").map(s => s.trim()).filter(s => s.length > 0);
-      if (parts.length > 1) {
-        const statements = parts.slice(0, -1).join(";\n") + ";";
-        const lastExpr = parts[parts.length - 1];
-        try {
-          const multiReturnFn = new Function(`"use strict";\n${setupCode}\n${statements}\nreturn (${lastExpr})`);
-          returnValue = multiReturnFn();
-        } catch(e2) {
-          returnValue = actualResult;
-        }
-      } else {
-        returnValue = actualResult;
-      }
-    }
-
-    const check = question.check;
-
     if (check.type === "value") {
+      const response = await sendToSandbox({ mode: "expression", code: code, setup: setup });
+      if (response.error) { result.error = response.error; return result; }
       result.expected = check.expected;
-      result.actual = returnValue;
-      result.success = returnValue === check.expected;
+      result.actual = response.returnValue;
+      result.success = response.returnValue === check.expected;
 
     } else if (check.type === "function") {
-      const fnName = check.functionName;
-      // Create a scope with the student's code, then call the function
-      const tests = check.tests;
+      const testArgsList = check.tests.map(function(t) { return t.args; });
+      const response = await sendToSandbox({
+        mode: "function-test",
+        code: code,
+        setup: setup,
+        functionName: check.functionName,
+        testArgsList: testArgsList
+      });
+      if (response.error) { result.error = response.error; return result; }
+
       let allPassed = true;
       let firstFailure = null;
-
-      for (const test of tests) {
-        const callCode = `${setupCode}\n${code}\nreturn ${fnName}(${test.args.map(a => JSON.stringify(a)).join(", ")})`;
-        const testFn = new Function(`"use strict";\n${callCode}`);
-        const testResult = testFn();
-        if (testResult !== test.expected) {
+      for (let i = 0; i < check.tests.length; i++) {
+        if (response.testResults[i] !== check.tests[i].expected) {
           allPassed = false;
-          firstFailure = { args: test.args, expected: test.expected, actual: testResult };
+          firstFailure = { args: check.tests[i].args, expected: check.tests[i].expected, actual: response.testResults[i] };
           break;
         }
       }
-
       result.success = allPassed;
       if (firstFailure) {
-        result.expected = `${fnName}(${firstFailure.args.join(", ")}) should be ${JSON.stringify(firstFailure.expected)}`;
+        result.expected = `${check.functionName}(${firstFailure.args.join(", ")}) should be ${JSON.stringify(firstFailure.expected)}`;
         result.actual = firstFailure.actual;
       }
 
     } else if (check.type === "predicate") {
-      const predCode = check.predicateCode
-        .replace(/\bRESULT\b/g, "___result___")
-        .replace(/\bCODE\b/g, "___code___");
-      const predFn = new Function("___result___", "___code___", `"use strict"; return (${predCode})`);
-      result.success = predFn(returnValue, code);
-      result.actual = returnValue;
+      const response = await sendToSandbox({
+        mode: "predicate",
+        code: code,
+        setup: setup,
+        predicateCode: check.predicateCode
+      });
+      if (response.error) { result.error = response.error; return result; }
+      result.success = response.predicateResult;
+      result.actual = response.returnValue;
 
     } else if (check.type === "output") {
-      // TODO: capture console.log output
       result.success = false;
       result.error = "Output checks not yet implemented.";
     }
-
   } catch(e) {
     result.error = e.message;
   }
@@ -787,7 +904,7 @@ function evaluate(code, question) {
 
 
 // ============================================================
-// UI
+// UI (Finding 2: safe HTML rendering via textContent/createElement)
 // ============================================================
 
 const dialogue = document.getElementById("dialogue");
@@ -796,7 +913,23 @@ const btnSubmit = document.getElementById("btn-submit");
 const btnHint = document.getElementById("btn-hint");
 const progressFill = document.getElementById("progress-fill");
 
-function addMessage(type, html, extraClass) {
+// Renders text that may contain <code>...</code> tags safely.
+// Only <code> elements are created; all other content becomes text nodes.
+function renderRichText(container, str) {
+  const parts = str.split(/(<code>[\s\S]*?<\/code>)/g);
+  for (const part of parts) {
+    const match = part.match(/^<code>([\s\S]*?)<\/code>$/);
+    if (match) {
+      const codeEl = document.createElement("code");
+      codeEl.textContent = match[1];
+      container.appendChild(codeEl);
+    } else if (part.length > 0) {
+      container.appendChild(document.createTextNode(part));
+    }
+  }
+}
+
+function addMessage(type, content, extraClass) {
   const div = document.createElement("div");
   div.className = `message ${type}` + (extraClass ? ` ${extraClass}` : "");
 
@@ -810,9 +943,16 @@ function addMessage(type, html, extraClass) {
 
   const bubble = document.createElement("div");
   bubble.className = "bubble";
-  bubble.innerHTML = html;
-  div.appendChild(bubble);
 
+  if (type === "student") {
+    // Student code is always plain text — no HTML parsing
+    bubble.textContent = content;
+  } else {
+    // Tutor/feedback/hint: allow only <code> tags, everything else as text
+    renderRichText(bubble, content);
+  }
+
+  div.appendChild(bubble);
   dialogue.appendChild(div);
   dialogue.scrollTop = dialogue.scrollHeight;
   return div;
@@ -856,21 +996,28 @@ function showCurrentQuestion() {
   updateProgress();
 }
 
-function handleSubmit() {
+async function handleSubmit() {
   const code = editor.value.trim();
   if (!code) return;
 
   const question = State.currentQuestion();
   if (!question) return;
 
-  // Show what the student typed
-  addMessage("student", escapeHtml(code));
+  // Show what the student typed (plain text, no HTML parsing)
+  addMessage("student", code);
 
-  // Evaluate
-  const result = evaluate(code, question);
+  // Disable controls during evaluation
+  btnSubmit.disabled = true;
+  btnHint.disabled = true;
+
+  const result = await evaluate(code, question);
+
+  // Re-enable controls
+  btnSubmit.disabled = false;
+  btnHint.disabled = !question.hints || State.hintIndex >= question.hints.length;
 
   if (result.error) {
-    addMessage("feedback", `Error: <code>${escapeHtml(result.error)}</code>`, "incorrect");
+    addMessage("feedback", `Error: <code>${result.error}</code>`, "incorrect");
     return;
   }
 
@@ -904,11 +1051,11 @@ function handleSubmit() {
     // Show what went wrong
     let msg = "Not quite.";
     if (result.expected !== undefined && result.actual !== undefined) {
-      msg += ` Your code returned <code>${escapeHtml(String(result.actual))}</code>.`;
+      msg += ` Your code returned <code>${String(result.actual)}</code>.`;
       if (typeof result.expected === "string" && result.expected.includes("should be")) {
-        msg += ` ${escapeHtml(result.expected)}.`;
+        msg += ` ${result.expected}.`;
       } else {
-        msg += ` Expected <code>${escapeHtml(String(result.expected))}</code>.`;
+        msg += ` Expected <code>${String(result.expected)}</code>.`;
       }
     }
     addMessage("feedback", msg, "incorrect");
@@ -927,12 +1074,6 @@ function handleHint() {
       btnHint.disabled = true;
     }
   }
-}
-
-function escapeHtml(str) {
-  const div = document.createElement("div");
-  div.textContent = str;
-  return div.innerHTML;
 }
 
 // -- Event listeners --
@@ -978,4 +1119,3 @@ editor.addEventListener("keydown", function(e) {
 </script>
 </body>
 </html>
-
